@@ -3,9 +3,11 @@ import os
 import sentry_sdk
 from sentry_sdk.integrations.flask import FlaskIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
-
+from sqlalchemy.exc import SQLAlchemyError
+import ldap
 import csh_ldap
 from flask import Flask, render_template, jsonify, request, redirect, flash
+from flask_sqlalchemy import SQLAlchemy
 from flask_pyoidc.flask_pyoidc import OIDCAuthentication
 from flask_uploads import UploadSet, configure_uploads, IMAGES
 
@@ -22,6 +24,7 @@ auth = OIDCAuthentication(app, issuer=app.config["OIDC_ISSUER"],
                           client_registration_info=app.config["OIDC_CLIENT_CONFIG"])
 
 # Sentry
+# pylint: disable=abstract-class-instantiated
 sentry_sdk.init(
     dsn=app.config['SENTRY_DSN'],
     integrations=[FlaskIntegration(), SqlalchemyIntegration()]
@@ -80,7 +83,7 @@ def user(uid=None, info=None):
 @before_request
 def results():
     searched = request.form['query']
-    return redirect("/search/{}".format(searched), 302)
+    return redirect(f"/search/{searched}", 302)
 
 
 @app.route("/search", methods=["GET"])
@@ -185,6 +188,7 @@ def clear_cache(info=None):
     return redirect(request.referrer, 302)
 
 
+@app.errorhandler(404)
 @app.errorhandler(500)
 def handle_internal_error(e):
     if isinstance(e.original_exception, BadQueryError):
@@ -192,9 +196,36 @@ def handle_internal_error(e):
     raise e.original_exception
 
 
-@app.route("/health")
-def health():
-    """
-    Shows an ok status if the application is up and running
-    """
-    return {"status": "ok"}
+@app.route('/api/v1/healthcheck', methods=["GET"])
+def health_check():
+    #   Return codes
+    #       200 - Success
+    #       512 - LDAP failure
+    #       513 - DB failure
+    #       514 - LDAP & DB failure
+    return_code = 200
+    jsonout = {
+        "ldap": {
+            "status": True,
+            "server": None,
+        },
+        "database": {
+            "status": True,
+            "server": None,
+        }
+    }
+    try:
+        jsonout["ldap"]["server"] = _ldap.server_uri
+        ldap_get_active_members()
+    except ldap.LDAPError:
+        jsonout["ldap"]["status"] = False
+        return_code = 512
+    try:
+        test_db = SQLAlchemy(app)
+        test_db.engine.connect()
+        jsonout["database"]["server"] = app.config['SQLALCHEMY_DATABASE_URI']
+    except SQLAlchemyError:
+        jsonout["database"]["status"] = False
+        return_code = 514 if return_code == 512 else 513
+
+    return jsonify(jsonout), return_code
