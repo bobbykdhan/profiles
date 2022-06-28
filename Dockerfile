@@ -11,10 +11,12 @@ RUN mkdir /opt/profiles
 
 WORKDIR /opt/profiles
 
+RUN pip install --upgrade pip
+
 COPY requirements.txt /opt/profiles
 
 RUN pip install -r requirements.txt
 
 COPY . /opt/profiles
 
-ENTRYPOINT ["gunicorn", "profiles:app",  "--bind=0.0.0.0:8080", "--access-logfile=-", "--timeout=600"]
+ENTRYPOINT ["ddtrace-run", "gunicorn", "profiles:app",  "--bind=0.0.0.0:8080", "--access-logfile=-", "--timeout=600"]
